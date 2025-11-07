@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reflex Pong - Last Hitter Scores</title>
+<style>
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: radial-gradient(circle at center, #0a0a1a, #000);
+  font-family: 'Courier New', monospace; overflow: hidden;
+}
+canvas {
+  display: block; margin: 0 auto;
+  border-radius: 20px; box-shadow: 0 0 50px #0ff;
+}
+#menu, #winScreen {
+  position: absolute; top:0; left:0; width:100%; height:100%;
+  background: rgba(10,10,20,0.95); display:flex;
+  justify-content:center; align-items:center; flex-direction:column;
+  color:#0ff; font-size:2rem; text-align:center; z-index:10;
+}
+button {
+  margin-top:20px; padding:10px 20px; font-size:1.5rem; cursor:pointer;
+  background:#0ff; border:none; border-radius:10px; color:#000;
+  box-shadow:0 0 20px #0ff;
+}
+#scoreboard {
+  position:absolute; top:30px; width:100%; text-align:center;
+  font-size:2rem; color:#0ff; text-shadow: 0 0 15px #0ff;
+  transition: transform 0.2s;
+}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>Reflex Pong</h1>
+  <p>Player 1: W/S | Player 2: ↑/↓</p>
+  <p>Choose Mode:</p>
+  <button id="start2P">2 Player</button>
+  <button id="start1P">1 Player vs AI</button>
+</div>
+
+<div id="winScreen" style="display:none;">
+  <h1 id="winnerText"></h1>
+  <p>High Score: <span id="highScore">0</span></p>
+  <button id="restartBtn">Play Again</button>
+</div>
+
+<div id="scoreboard">0 : 0</div>
+<canvas id="gameCanvas" width="900" height="600"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const scoreboard = document.getElementById("scoreboard");
+const menu = document.getElementById("menu");
+const winScreen = document.getElementById("winScreen");
+const winnerText = document.getElementById("winnerText");
+const highScoreSpan = document.getElementById("highScore");
+
+let paddleWidth=15, paddleHeight=100, ballRadius=12, speedIncrement=1.05;
+let paddle1={x:20,y:canvas.height/2-paddleHeight/2};
+let paddle2={x:canvas.width-20-paddleWidth,y:canvas.height/2-paddleHeight/2};
+let ball={x:canvas.width/2,y:canvas.height/2,dx:5,dy:3};
+let score1=0, score2=0, maxScore=6;
+let highScore=localStorage.getItem("pongHighScore")||0;
+highScoreSpan.textContent=highScore;
+
+let keys={}, gameRunning=false, aiMode=false, ballPaused=false;
+let lastHit=null; // Tracks who hit the ball last
+
+// Particle system
+let particles=[];
+let ballTrail=[];
+
+// Audio
+const paddleHit=new Audio("https://freesound.org/data/previews/82/82921_1022650-lq.mp3");
+const wallHit=new Audio("https://freesound.org/data/previews/26/26077_512123-lq.mp3");
+const scoreHit=new Audio("https://freesound.org/data/previews/331/331912_3248244-lq.mp3");
+
+// Keyboard
+document.addEventListener('keydown', e => keys[e.key]=true);
+document.addEventListener('keyup', e => keys[e.key]=false);
+
+// Start buttons
+document.getElementById("start2P").onclick=()=>{aiMode=false; startGame();}
+document.getElementById("start1P").onclick=()=>{aiMode=true; startGame();}
+
+// Restart button
+document.getElementById("restartBtn").onclick=()=>{winScreen.style.display="none"; resetGame(); gameRunning=true; requestAnimationFrame(gameLoop);}
+
+function startGame(){menu.style.display="none"; resetGame(); gameRunning=true; requestAnimationFrame(gameLoop);}
+
+function resetBall(){
+  ball.x=canvas.width/2;
+  ball.y=canvas.height/2;
+  ballPaused=true;
+  // Launch ball after 1 second
+  setTimeout(()=>{
+    ball.dx=(Math.random()>0.5?5:-5);
+    ball.dy=(Math.random()*4-2);
+    ballPaused=false;
+  },1000);
+  lastHit=null; // reset last hitter
+}
+
+function resetGame(){
+  score1=0; score2=0;
+  paddle1.y=canvas.height/2-paddleHeight/2;
+  paddle2.y=canvas.height/2-paddleHeight/2;
+  particles=[]; ballTrail=[];
+  resetBall();
+}
+
+// AI movement
+function moveAI(){
+  let speed=5;
+  if(ball.y>paddle2.y+paddleHeight/2) paddle2.y+=speed;
+  else paddle2.y-=speed;
+  if(paddle2.y<0)paddle2.y=0;
+  if(paddle2.y+paddleHeight>canvas.height)paddle2.y=canvas.height-paddleHeight;
+}
+
+// Particles
+function createParticles(x,y,color){
+  for(let i=0;i<12;i++){
+    particles.push({x,y,radius:Math.random()*3+2,dx:(Math.random()-0.5)*5,dy:(Math.random()-0.5)*5,color,life:40});
+  }
+}
+function updateParticles(){particles.forEach((p,i)=>{p.x+=p.dx;p.y+=p.dy;p.life--; if(p.life<=0)particles.splice(i,1);});}
+function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=p.life/40; ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,p.radius,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;});}
+
+// Ball trail
+function updateBallTrail(){ballTrail.push({x:ball.x,y:ball.y,alpha:0.5}); if(ballTrail.length>20) ballTrail.shift();}
+function drawBallTrail(){ballTrail.forEach(b=>{ctx.globalAlpha=b.alpha; ctx.fillStyle="#0ff"; ctx.beginPath(); ctx.arc(b.x,b.y,ballRadius,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;});}
+
+// Draw everything
+function draw(){
+  // Background gradient
+  let gradient=ctx.createLinearGradient(0,0,0,canvas.height);
+  gradient.addColorStop(0,"#111"); gradient.addColorStop(1,"#222");
+  ctx.fillStyle=gradient; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  drawBallTrail();
+
+  // Ball glow
+  ctx.shadowColor="#0ff"; ctx.shadowBlur=20;
+  ctx.fillStyle="#0ff";
+  ctx.beginPath(); ctx.arc(ball.x,ball.y,ballRadius,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+
+  // Paddle color changes based on score
+  let color1=`hsl(${score1*40},100%,50%)`;
+  let color2=`hsl(${score2*40},100%,50%)`;
+  ctx.fillStyle=color1; ctx.fillRect(paddle1.x,paddle1.y,paddleWidth,paddleHeight);
+  ctx.fillStyle=color2; ctx.fillRect(paddle2.x,paddle2.y,paddleWidth,paddleHeight);
+
+  drawParticles();
+}
+
+// Update positions
+function update(){
+  // Paddle movement
+  if(keys['w'] && paddle1.y>0)paddle1.y-=7;
+  if(keys['s'] && paddle1.y+paddleHeight<canvas.height)paddle1.y+=7;
+  if(!aiMode){
+    if(keys['ArrowUp'] && paddle2.y>0)paddle2.y-=7;
+    if(keys['ArrowDown'] && paddle2.y+paddleHeight<canvas.height)paddle2.y+=7;
+  } else moveAI();
+
+  if(!ballPaused){
+    ball.x+=ball.dx; ball.y+=ball.dy;
+  }
+  updateBallTrail();
+
+  // Wall collision
+  if(ball.y-ballRadius<0 || ball.y+ballRadius>canvas.height){ ball.dy*=-1; wallHit.play(); }
+
+  // Paddle collision and last hitter tracking
+  if(ball.x-ballRadius < paddle1.x+paddleWidth && ball.x-ballRadius>paddle1.x &&
+     ball.y>paddle1.y && ball.y<paddle1.y+paddleHeight){
+       ball.dx*=-1; ball.dx*=speedIncrement; ball.dy*=speedIncrement;
+       paddleHit.play(); createParticles(ball.x,ball.y,color1);
+       lastHit="player1";
+  }
+
+  if(ball.x+ballRadius>paddle2.x && ball.x+ballRadius<paddle2.x+paddleWidth &&
+     ball.y>paddle2.y && ball.y<paddle2.y+paddleHeight){
+       ball.dx*=-1; ball.dx*=speedIncrement; ball.dy*=speedIncrement;
+       paddleHit.play(); createParticles(ball.x,ball.y,color2);
+       lastHit="player2";
+  }
+
+  // Check if a player misses the ball
+  if(ball.x<0){ // passed player1
+    if(lastHit==="player2") score2++; else score1++;
+    scoreHit.play(); resetBall();
+  }
+  if(ball.x>canvas.width){ // passed player2
+    if(lastHit==="player1") score1++; else score2++;
+    scoreHit.play(); resetBall();
+  }
+
+  // Scoreboard animation
+  scoreboard.style.transform="scale(1.2)";
+  setTimeout(()=>{scoreboard.style.transform="scale(1)";},100);
+  scoreboard.textContent=`${score1} : ${score2}`;
+
+  updateParticles();
+}
+
+// Check win
+function checkWin(){
+  if(score1>=maxScore) endGame("Player 1 Wins!");
+  else if(score2>=maxScore) endGame(aiMode?"AI Wins!":"Player 2 Wins!");
+}
+
+// End game
+function endGame(winner){
+  gameRunning=false; winnerText.textContent=winner;
+  if(score1>highScore) highScore=score1;
+  if(score2>highScore) highScore=score2;
+  localStorage.setItem("pongHighScore",highScore);
+  highScoreSpan.textContent=highScore;
+  winScreen.style.display="flex";
+}
+
+// Main loop
+function gameLoop(){
+  if(!gameRunning) return;
+  update(); draw(); checkWin();
+  requestAnimationFrame(gameLoop);
+}
+
+resetGame();
+</script>
+</body>
+</html>
